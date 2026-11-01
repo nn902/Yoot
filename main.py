@@ -199,10 +199,18 @@ async def search_process(message: Message, state: FSMContext):
     await message.answer(f"{E_SEARCH} <b>Результаты поиска:</b>")
     for m in movies:
         m_id, title, category, price = m
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"Купить за {price} ⭐️", callback_data=f"buy_{m_id}_{price}", style="success")]
-        ])
-        await message.answer(f"🎬 <b>{title}</b>\n📁 Категория: {category}\n💰 Цена: {price} ⭐️", reply_markup=kb)
+        
+        # ИЗМЕНЕНИЕ: Логика для бесплатных фильмов
+        if price == 0:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎬 Смотреть бесплатно", callback_data=f"watch_{m_id}", style="success")]
+            ])
+            await message.answer(f"🎬 <b>{title}</b>\n📁 Категория: {category}\n🆓 <b>Бесплатно</b>", reply_markup=kb)
+        else:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"Купить за {price} ⭐️", callback_data=f"buy_{m_id}_{price}", style="success")]
+            ])
+            await message.answer(f"🎬 <b>{title}</b>\n📁 Категория: {category}\n💰 Цена: {price} ⭐️", reply_markup=kb)
 
 # --- ПОКУПКА И ПРОСМОТР ---
 @router.callback_query(F.data.startswith("buy_"))
@@ -242,6 +250,27 @@ async def process_successful_payment(message: Message):
         
         await message.answer(f"{E_CHECK} <b>Оплата прошла успешно!</b>\n\nВаш фильм ниже 👇")
         await message.answer_video(video=movie[1], caption=f"🎬 <b>{movie[0]}</b>")
+
+# НОВЫЙ ОБРАБОТЧИК: Просмотр бесплатного фильма
+@router.callback_query(F.data.startswith("watch_"))
+async def watch_movie(callback: CallbackQuery):
+    m_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+    
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Добавляем в историю покупок (чтобы в будущем знать, что юзер смотрел)
+    cursor.execute("INSERT OR IGNORE INTO purchases (user_id, movie_id) VALUES (?, ?)", (user_id, m_id))
+    cursor.execute("SELECT title, file_id FROM movies WHERE id = ?", (m_id,))
+    movie = cursor.fetchone()
+    conn.commit()
+    conn.close()
+    
+    if movie:
+        await callback.message.answer_video(video=movie[1], caption=f"🎬 <b>{movie[0]}</b>\n\n<i>Приятного просмотра!</i>")
+        await callback.answer()
+    else:
+        await callback.answer("Фильм не найден!", show_alert=True)
 
 # ==============================================================================
 # ⚙️ АДМИН-ПАНЕЛЬ
@@ -284,7 +313,6 @@ async def process_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text)
     await state.set_state(AddMovie.category)
     
-    # Клавиатура с категориями
     kb = InlineKeyboardMarkup(inline_keyboard=[])
     for cat in CATEGORIES:
         kb.inline_keyboard.append([InlineKeyboardButton(text=cat, callback_data=f"cat_{cat}", style="primary")])
@@ -305,7 +333,8 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
 async def process_video(message: Message, state: FSMContext):
     await state.update_data(file_id=message.video.file_id)
     await state.set_state(AddMovie.price)
-    await message.answer("4️⃣ Введи цену в Звездах (например: 19):")
+    # ИЗМЕНЕНИЕ: Подсказка про ноль
+    await message.answer("4️⃣ Введи цену в Звездах (напиши 0, если фильм бесплатный):")
 
 @router.message(AddMovie.video)
 async def process_video_error(message: Message):
@@ -326,20 +355,21 @@ async def process_price(message: Message, state: FSMContext):
                    (data['title'], data['category'], data['file_id'], price))
     conn.commit()
     
-    # Получаем всех юзеров для рассылки
     cursor.execute("SELECT user_id FROM users")
     users = [row[0] for row in cursor.fetchall()]
     conn.close()
 
     await message.answer(f"{E_CHECK} Фильм <b>{data['title']}</b> добавлен! Начинаю рассылку...", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В админку", callback_data="admin_panel")]]))
 
-    # Асинхронная рассылка
+    # ИЗМЕНЕНИЕ: Красивое отображение цены в рассылке
+    price_text = f"{E_MONEY} Цена: {price} ⭐️" if price > 0 else "🆓 <b>Бесплатно</b>"
+    
     broadcast_text = (
         f"{E_FIRE} <b>НОВЫЙ УНИКАЛЬНЫЙ ФИЛЬМ!</b> {E_FIRE}\n\n"
         f"🎬 <b>{data['title']}</b>\n"
         f"📁 Категория: {data['category']}\n"
-        f"{E_MONEY} Цена: {price} ⭐️\n\n"
-        f"Скорее заходи в бота и покупай!"
+        f"{price_text}\n\n"
+        f"Скорее заходи в бота и смотри!"
     )
     
     async def send_broadcast():
@@ -348,7 +378,7 @@ async def process_price(message: Message, state: FSMContext):
                 await bot.send_message(u_id, broadcast_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="🍿 В кинотеатр", callback_data="back_to_main", style="success")]
                 ]))
-                await asyncio.sleep(0.05) # Защита от лимитов
+                await asyncio.sleep(0.05)
             except:
                 pass
                 
