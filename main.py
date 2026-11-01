@@ -20,7 +20,7 @@ import uvicorn
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ТВОЙ_ТОКЕН_БОТА")
 ADMIN_ID = 7727345054
 # Сюда вставишь ссылку на твой сайт с Vercel (например: https://nm-cinema.vercel.app)
-WEBAPP_URL = "https://example.com" 
+WEBAPP_URL = "https://cinema-omega.vercel.app" 
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
